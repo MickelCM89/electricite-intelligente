@@ -5,6 +5,7 @@ import datetime
 import os
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
+from pathlib import Path
  
 st.set_page_config(
     page_title="Électricité Intelligente",
@@ -15,19 +16,20 @@ st.set_page_config(
 # ─────────────────────────────────────────────
 # LOGO
 # ─────────────────────────────────────────────
-logo_gif = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo_animated.gif")
-logo_png = os.path.join(os.path.dirname(os.path.abspath(__file__)), "foto1.png")
-if os.path.exists(logo_gif):
-    st.image(logo_gif, width=230)
-elif os.path.exists(logo_png):
-    st.image(logo_png, width=230)
+logo_gif = Path(__file__).parent / "logo_animated.gif"
+logo_png = Path(__file__).parent / "foto1.png"
+if logo_gif.exists():
+    st.image(str(logo_gif), width=230)
+elif logo_png.exists():
+    st.image(str(logo_png), width=230)
  
-
- 
+# ─────────────────────────────────────────────
+# CARGA DE DATOS DESDE CSV
+# ─────────────────────────────────────────────
 @st.cache_data
 def load_data():
-    query = "SELECT * FROM fact_energie_extended ORDER BY date_heure"
-    df = pd.read_sql(query, engine)
+    csv_path = Path(__file__).parent / "fact_energie_extended.csv"
+    df = pd.read_csv(csv_path)
     df["date_heure"] = pd.to_datetime(df["date_heure"], utc=True)
     return df
  
@@ -56,7 +58,6 @@ def train_models(_df):
     rf_co2 = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
     rf_co2.fit(X, df_ml["taux_co2"])
  
-    # Promedios históricos por heure+mois (fallback para fechas futuras)
     avg_prod = df_ml.groupby(["heure", "mois"])[
         ["nucleaire", "eolien", "solaire", "hydraulique"]
     ].mean().reset_index()
@@ -66,22 +67,15 @@ def train_models(_df):
 rf_prix, rf_co2, avg_prod = train_models(df)
  
 def predict_for_datetime(dt, df_source):
-    """
-    Predice prix y CO2 para un datetime dado.
-    Para fechas que existen en el dataset (2025): usa producción REAL.
-    Para fechas futuras: usa promedios históricos como fallback.
-    """
     heure        = dt.hour
     mois         = dt.month
     jour_semaine = dt.weekday()
     weekend      = 1 if jour_semaine >= 5 else 0
  
-    # Buscar registro real más cercano en el dataset
     target = pd.Timestamp(dt, tz="UTC")
     df_day = df_source[df_source["date_heure"].dt.date == dt.date()]
  
     if not df_day.empty:
-        # Usar valores REALES de producción de ese momento exacto
         idx = (df_day["date_heure"] - target).abs().idxmin()
         row = df_day.loc[idx]
         nucleaire   = row["nucleaire"]
@@ -89,7 +83,6 @@ def predict_for_datetime(dt, df_source):
         solaire     = row["solaire"]
         hydraulique = row["hydraulique"]
     else:
-        # Fallback para fechas futuras: usar promedios históricos
         row_avg = avg_prod[
             (avg_prod["heure"] == heure) &
             (avg_prod["mois"]  == mois)
@@ -216,9 +209,8 @@ def render_time_circuits(df_source, present_dt, prix_pred, co2_pred):
           <div style="text-align:center;"><div style="{label}">g CO2</div><div style="{number}">{data['co2']}</div></div>
         </div>"""
  
-    # Fila PRÉDICTION IA — cian
-    color_ia = "#00ffff"
-    dt_sel   = present_dt
+    color_ia  = "#00ffff"
+    dt_sel    = present_dt
     label_ia  = "color:#ffffff; font-family:'Courier New',monospace; font-size:18px; letter-spacing:4px; margin-bottom:8px; font-weight:bold;"
     number_ia = f"font-family:'Digital-7 Mono','DSEG7 Classic','Courier New',monospace; font-size:62px; font-weight:bold; color:{color_ia}; text-shadow:0 0 14px {color_ia};"
  
@@ -270,7 +262,6 @@ def render_time_circuits(df_source, present_dt, prix_pred, co2_pred):
 st.markdown("""
 <style>
 @import url('https://fonts.cdnfonts.com/css/share-tech-mono');
- 
 .header-main {
     font-family: 'Share Tech Mono', 'Courier New', monospace !important;
     font-size: 3.8vw !important;
@@ -278,10 +269,7 @@ st.markdown("""
     font-weight: bold !important;
     color: #ffffff !important;
     text-align: right !important;
-    text-shadow:
-        0 0 4px rgba(255,255,255,0.9),
-        0 0 10px rgba(255,255,255,0.4),
-        0 0 22px rgba(255,255,255,0.15) !important;
+    text-shadow: 0 0 4px rgba(255,255,255,0.9), 0 0 10px rgba(255,255,255,0.4) !important;
     margin: 0 0 6px 0 !important;
     padding: 0 !important;
     line-height: 1.1 !important;
@@ -306,14 +294,11 @@ st.markdown("""
     letter-spacing: 5px !important;
     font-weight: bold !important;
     color: #ffffff !important;
-    text-shadow:
-        0 0 4px rgba(255,255,255,0.8),
-        0 0 12px rgba(255,255,255,0.3) !important;
+    text-shadow: 0 0 4px rgba(255,255,255,0.8), 0 0 12px rgba(255,255,255,0.3) !important;
     margin: 0 0 24px 0 !important;
     padding: 0 !important;
 }
 </style>
- 
 <p class="header-main">⚡ ÉLECTRICITÉ INTELLIGENTE</p>
 <p class="header-sub">&gt; QUAND ET OÙ CONSOMMER EN FRANCE_</p>
 <hr class="header-divider">
@@ -321,13 +306,9 @@ st.markdown("""
  
 st.markdown('<p class="section-title">🛠 PANNEAU DE CONTRÔLE TEMPOREL</p>', unsafe_allow_html=True)
  
-# ─────────────────────────────────────────────
-# CSS botones ▲▼
-# ─────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
- 
 div[data-testid="stButton"] > button {
     background: transparent !important;
     border: none !important;
@@ -359,9 +340,6 @@ div[data-testid="stButton"] > button:focus {
 </style>
 """, unsafe_allow_html=True)
  
-# ─────────────────────────────────────────────
-# FLIP CARD
-# ─────────────────────────────────────────────
 def flip_card(value, label, font_size="56px"):
     return f"""
     <div style="display:flex;flex-direction:column;align-items:center;">
@@ -372,12 +350,8 @@ def flip_card(value, label, font_size="56px"):
                   display:flex;align-items:center;justify-content:center;
                   font-family:'Share Tech Mono','Courier New',monospace;
                   font-size:{font_size};font-weight:bold;color:#ffb02b;
-                  text-shadow:0 0 16px rgba(255,176,43,0.6),
-                              0 0 40px rgba(255,176,43,0.25),
-                              0 0 80px rgba(255,176,43,0.1);
-                  box-shadow:0 6px 20px rgba(0,0,0,0.9),
-                             inset 0 1px 0 rgba(255,255,255,0.05),
-                             inset 0 -2px 0 rgba(0,0,0,0.6);
+                  text-shadow:0 0 16px rgba(255,176,43,0.6),0 0 40px rgba(255,176,43,0.25);
+                  box-shadow:0 6px 20px rgba(0,0,0,0.9),inset 0 1px 0 rgba(255,255,255,0.05);
                   position:relative;border:1px solid #383838;">
         <div style="position:absolute;left:6%;width:88%;height:1px;
                     background:rgba(0,0,0,0.55);top:50%;"></div>
@@ -385,9 +359,6 @@ def flip_card(value, label, font_size="56px"):
       </div>
     </div>"""
  
-# ─────────────────────────────────────────────
-# LAYOUT FLIP CLOCK + BOTONES TRANCHE
-# ─────────────────────────────────────────────
 c1, c2, c3, c4, c5, c6, cbtn = st.columns([1, 1, 0.1, 1, 0.2, 1, 1.2])
  
 with c1:
@@ -436,24 +407,15 @@ with cbtn:
     <script>
     (function() {
         const STYLES = {
-            '\u00c0 \u00c9VITER': {
-                color: '#ff2b2b', border: '1.5px solid rgba(255,43,43,0.6)',
-                textShadow: '0 0 8px rgba(255,43,43,0.9), 0 0 20px rgba(255,43,43,0.5)',
-                boxShadow: '0 0 10px rgba(255,43,43,0.2)',
-                background: '#1a0808', hoverBg: '#2e1212',
-            },
-            'MOMENT ID\u00c9AL': {
-                color: '#2bff5e', border: '1.5px solid rgba(43,255,94,0.6)',
-                textShadow: '0 0 8px rgba(43,255,94,0.9), 0 0 20px rgba(43,255,94,0.5)',
-                boxShadow: '0 0 10px rgba(43,255,94,0.2)',
-                background: '#081a0e', hoverBg: '#0e2e18',
-            },
-            'ACCEPTABLE': {
-                color: '#ffb02b', border: '1.5px solid rgba(255,176,43,0.6)',
-                textShadow: '0 0 8px rgba(255,176,43,0.9), 0 0 20px rgba(255,176,43,0.5)',
-                boxShadow: '0 0 10px rgba(255,176,43,0.2)',
-                background: '#1a1200', hoverBg: '#2e2010',
-            }
+            '\u00c0 \u00c9VITER': {color:'#ff2b2b',border:'1.5px solid rgba(255,43,43,0.6)',
+                textShadow:'0 0 8px rgba(255,43,43,0.9)',boxShadow:'0 0 10px rgba(255,43,43,0.2)',
+                background:'#1a0808',hoverBg:'#2e1212'},
+            'MOMENT ID\u00c9AL': {color:'#2bff5e',border:'1.5px solid rgba(43,255,94,0.6)',
+                textShadow:'0 0 8px rgba(43,255,94,0.9)',boxShadow:'0 0 10px rgba(43,255,94,0.2)',
+                background:'#081a0e',hoverBg:'#0e2e18'},
+            'ACCEPTABLE': {color:'#ffb02b',border:'1.5px solid rgba(255,176,43,0.6)',
+                textShadow:'0 0 8px rgba(255,176,43,0.9)',boxShadow:'0 0 10px rgba(255,176,43,0.2)',
+                background:'#1a1200',hoverBg:'#2e2010'}
         };
         function styleButtons(doc) {
             doc.querySelectorAll('[data-testid="stButton"] button').forEach(btn => {
@@ -461,20 +423,16 @@ with cbtn:
                 const label = (p ? p.innerText : btn.innerText).trim().toUpperCase();
                 const cfg = STYLES[label];
                 if (!cfg) return;
-                btn.style.setProperty('font-family', "'Share Tech Mono','Courier New',monospace", 'important');
-                btn.style.setProperty('font-size', '13px', 'important');
-                btn.style.setProperty('letter-spacing', '3px', 'important');
-                btn.style.setProperty('font-weight', 'bold', 'important');
-                btn.style.setProperty('width', '100%', 'important');
-                btn.style.setProperty('height', '52px', 'important');
-                btn.style.setProperty('border-radius', '12px', 'important');
-                btn.style.setProperty('padding', '0 8px', 'important');
-                btn.style.setProperty('cursor', 'pointer', 'important');
-                btn.style.setProperty('display', 'flex', 'important');
-                btn.style.setProperty('align-items', 'center', 'important');
-                btn.style.setProperty('justify-content', 'center', 'important');
-                btn.style.setProperty('transition', 'all 0.15s ease', 'important');
-                btn.style.setProperty('margin-bottom', '8px', 'important');
+                ['font-family','font-size','letter-spacing','font-weight','width','height',
+                 'border-radius','padding','cursor','display','align-items','justify-content',
+                 'transition','margin-bottom'].forEach(prop => {
+                    const vals = {"font-family":"'Share Tech Mono',monospace","font-size":"13px",
+                        "letter-spacing":"3px","font-weight":"bold","width":"100%","height":"52px",
+                        "border-radius":"12px","padding":"0 8px","cursor":"pointer","display":"flex",
+                        "align-items":"center","justify-content":"center","transition":"all 0.15s",
+                        "margin-bottom":"8px"};
+                    btn.style.setProperty(prop, vals[prop], 'important');
+                });
                 btn.style.setProperty('color', cfg.color, 'important');
                 btn.style.setProperty('border', cfg.border, 'important');
                 btn.style.setProperty('text-shadow', cfg.textShadow, 'important');
@@ -482,19 +440,18 @@ with cbtn:
                 btn.style.setProperty('background', cfg.background, 'important');
                 if (p) {
                     p.style.setProperty('color', cfg.color, 'important');
-                    p.style.setProperty('font-family', "'Share Tech Mono',monospace", 'important');
                     p.style.setProperty('font-size', '13px', 'important');
                     p.style.setProperty('letter-spacing', '3px', 'important');
                     p.style.setProperty('font-weight', 'bold', 'important');
                     p.style.setProperty('text-shadow', cfg.textShadow, 'important');
                     p.style.setProperty('margin', '0', 'important');
                 }
-                if (!btn._tranche_styled) {
-                    btn._tranche_styled = true;
-                    btn.addEventListener('mouseenter', function() { this.style.setProperty('background', cfg.hoverBg, 'important'); });
-                    btn.addEventListener('mouseleave', function() { this.style.setProperty('background', cfg.background, 'important'); });
-                    btn.addEventListener('mousedown',  function() { this.style.setProperty('transform', 'scale(0.96)', 'important'); });
-                    btn.addEventListener('mouseup',    function() { this.style.setProperty('transform', 'scale(1)', 'important'); });
+                if (!btn._styled) {
+                    btn._styled = true;
+                    btn.addEventListener('mouseenter', () => btn.style.setProperty('background', cfg.hoverBg, 'important'));
+                    btn.addEventListener('mouseleave', () => btn.style.setProperty('background', cfg.background, 'important'));
+                    btn.addEventListener('mousedown',  () => btn.style.setProperty('transform', 'scale(0.96)', 'important'));
+                    btn.addEventListener('mouseup',    () => btn.style.setProperty('transform', 'scale(1)', 'important'));
                 }
             });
         }
@@ -509,7 +466,7 @@ with cbtn:
     """, height=0, scrolling=False)
  
 # ─────────────────────────────────────────────
-# RENDER PANEL + PRÉDICTION IA
+# RENDER PANEL
 # ─────────────────────────────────────────────
 safe_day = min(st.session_state.fd, DAYS_IN_MONTH[st.session_state.fm - 1])
 date_voyage = datetime.date(2025, st.session_state.fm, safe_day)
@@ -517,7 +474,6 @@ present_dt_selected = datetime.datetime.combine(
     date_voyage, datetime.time(hour=st.session_state.fh, minute=st.session_state.fmin)
 )
  
-# Predicción ML — ahora usa producción REAL para fechas de 2025
 prix_pred, co2_pred = predict_for_datetime(present_dt_selected, df)
- 
 render_time_circuits(df, present_dt_selected, prix_pred, co2_pred)
+ 
