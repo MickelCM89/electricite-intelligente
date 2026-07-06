@@ -5,7 +5,6 @@ import datetime
 import os
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
-from sqlalchemy import create_engine
  
 st.set_page_config(
     page_title="Électricité Intelligente",
