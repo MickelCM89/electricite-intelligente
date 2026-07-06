@@ -22,11 +22,7 @@ if os.path.exists(logo_gif):
 elif os.path.exists(logo_png):
     st.image(logo_png, width=230)
  
-@st.cache_resource
-def get_engine():
-    return create_engine("postgresql://solenemiguel@localhost:5432/projet_energie")
- 
-engine = get_engine()
+
  
 @st.cache_data
 def load_data():
