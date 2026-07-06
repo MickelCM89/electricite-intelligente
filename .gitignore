@@ -1,0 +1,6 @@
+*.png
+*.gif
+*.pkl
+__pycache__/
+.env
+*.pyc
