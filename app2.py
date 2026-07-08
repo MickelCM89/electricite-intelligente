@@ -6,13 +6,13 @@ import os
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
 from pathlib import Path
- 
+
 st.set_page_config(
     page_title="Électricité Intelligente",
     page_icon="⚡",
     layout="wide"
 )
- 
+
 # ─────────────────────────────────────────────
 # LOGO
 # ─────────────────────────────────────────────
@@ -22,7 +22,7 @@ if logo_gif.exists():
     st.image(str(logo_gif), width=230)
 elif logo_png.exists():
     st.image(str(logo_png), width=230)
- 
+
 # ─────────────────────────────────────────────
 # CARGA DE DATOS DESDE CSV
 # ─────────────────────────────────────────────
@@ -31,10 +31,16 @@ def load_data():
     csv_path = Path(__file__).parent / "fact_energie_extended.csv"
     df = pd.read_csv(csv_path)
     df["date_heure"] = pd.to_datetime(df["date_heure"], utc=True)
+    # Recalcular tranche_prix propre en cas de NaN ou valeurs incorrectes
+    df["tranche_prix"] = pd.cut(
+        df["prix_eur_mwh"],
+        bins=[-float("inf"), 10, 30, 60, float("inf")],
+        labels=["Très bon marché", "Bon marché", "Moyen", "Cher"]
+    ).astype(str)
     return df
- 
+
 df = load_data()
- 
+
 # ─────────────────────────────────────────────
 # RANDOM FOREST — entraînement
 # ─────────────────────────────────────────────
@@ -45,36 +51,36 @@ def train_models(_df):
     df_ml["mois"]         = df_ml["date_heure"].dt.month
     df_ml["jour_semaine"] = df_ml["date_heure"].dt.dayofweek
     df_ml["weekend"]      = (df_ml["jour_semaine"] >= 5).astype(int)
- 
+
     features = ["heure", "mois", "jour_semaine", "weekend",
                 "nucleaire", "eolien", "solaire", "hydraulique"]
- 
+
     df_ml = df_ml.dropna(subset=features + ["prix_eur_mwh", "taux_co2"])
     X = df_ml[features]
- 
+
     rf_prix = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
     rf_prix.fit(X, df_ml["prix_eur_mwh"])
- 
+
     rf_co2 = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
     rf_co2.fit(X, df_ml["taux_co2"])
- 
+
     avg_prod = df_ml.groupby(["heure", "mois"])[
         ["nucleaire", "eolien", "solaire", "hydraulique"]
     ].mean().reset_index()
- 
+
     return rf_prix, rf_co2, avg_prod
- 
+
 rf_prix, rf_co2, avg_prod = train_models(df)
- 
+
 def predict_for_datetime(dt, df_source):
     heure        = dt.hour
     mois         = dt.month
     jour_semaine = dt.weekday()
     weekend      = 1 if jour_semaine >= 5 else 0
- 
+
     target = pd.Timestamp(dt, tz="UTC")
     df_day = df_source[df_source["date_heure"].dt.date == dt.date()]
- 
+
     if not df_day.empty:
         idx = (df_day["date_heure"] - target).abs().idxmin()
         row = df_day.loc[idx]
@@ -97,33 +103,34 @@ def predict_for_datetime(dt, df_source):
             eolien      = row_avg["eolien"]
             solaire     = row_avg["solaire"]
             hydraulique = row_avg["hydraulique"]
- 
+
     X_pred = pd.DataFrame([{
         "heure": heure, "mois": mois,
         "jour_semaine": jour_semaine, "weekend": weekend,
         "nucleaire": nucleaire, "eolien": eolien,
         "solaire": solaire, "hydraulique": hydraulique
     }])
- 
+
     prix_pred = rf_prix.predict(X_pred)[0]
     co2_pred  = rf_co2.predict(X_pred)[0]
     return round(prix_pred, 1), round(co2_pred, 0)
- 
+
 TRANCHE_DISPLAY = {
     "Cher":            ("À éviter",     "#ff2b2b"),
     "Très bon marché": ("Moment idéal", "#2bff5e"),
     "Bon marché":      ("Acceptable",   "#ffb02b"),
+    "Moyen":           ("Acceptable",   "#ffb02b"),
 }
 MOIS_LABELS   = ["JAN","FÉV","MAR","AVR","MAI","JUN","JUL","AOÛ","SEP","OCT","NOV","DÉC"]
 DAYS_IN_MONTH = [31,28,31,30,31,30,31,31,30,31,30,31]
- 
+
 # ─────────────────────────────────────────────
 # SESSION STATE
 # ─────────────────────────────────────────────
 for k, v in [("fd",15),("fm",6),("fh",12),("fmin",0)]:
     if k not in st.session_state:
         st.session_state[k] = v
- 
+
 def change(field, delta):
     if field == "fd":
         max_d = DAYS_IN_MONTH[st.session_state.fm - 1]
@@ -137,21 +144,40 @@ def change(field, delta):
         st.session_state.fh  = (st.session_state.fh + delta) % 24
     elif field == "fmin":
         st.session_state.fmin = 30 if st.session_state.fmin == 0 else 0
- 
+
 def jump_to_tranche(tranche_db):
     safe_day = min(st.session_state.fd, DAYS_IN_MONTH[st.session_state.fm - 1])
     date_sel = datetime.date(2025, st.session_state.fm, safe_day)
-    df_day   = df[df["date_heure"].dt.date == date_sel]
-    df_t     = df_day[df_day["tranche_prix"] == tranche_db]
+
+    # Buscar en la fecha seleccionada
+    df_day = df[df["date_heure"].dt.date == date_sel]
+    df_t = df_day[df_day["tranche_prix"] == tranche_db]
+
+    # Si no hay esa tranche en esa fecha → usar precio mínimo del día
+    if df_t.empty and not df_day.empty:
+        best = df_day.loc[df_day["prix_eur_mwh"].idxmin()]
+        dt = best["date_heure"].to_pydatetime()
+        st.session_state.fh = dt.hour
+        st.session_state.fmin = 0 if dt.minute < 15 else 30
+        return
+
+    # Si no hay datos para esa fecha → buscar en el mismo mes
+    if df_t.empty:
+        df_mes = df[df["date_heure"].dt.month == st.session_state.fm]
+        df_t = df_mes[df_mes["tranche_prix"] == tranche_db]
+
+    # Último fallback → todo el dataset
     if df_t.empty:
         df_t = df[df["tranche_prix"] == tranche_db]
+
     if df_t.empty:
         return
+
     best = df_t.loc[df_t["prix_eur_mwh"].idxmin()]
-    dt   = best["date_heure"].to_pydatetime()
-    st.session_state.fh   = dt.hour
+    dt = best["date_heure"].to_pydatetime()
+    st.session_state.fh = dt.hour
     st.session_state.fmin = 0 if dt.minute < 15 else 30
- 
+
 # ─────────────────────────────────────────────
 # TIME CIRCUITS PANEL
 # ─────────────────────────────────────────────
@@ -169,7 +195,7 @@ def render_time_circuits(df_source, present_dt, prix_pred, co2_pred):
     row_found = df_day.loc[idx]
     tranche_db_activa         = row_found["tranche_prix"]
     tranche_display_activa, _ = TRANCHE_DISPLAY.get(tranche_db_activa, ("Acceptable","#ffb02b"))
- 
+
     def format_active(r):
         dt = r["date_heure"].to_pydatetime()
         return {
@@ -181,17 +207,17 @@ def render_time_circuits(df_source, present_dt, prix_pred, co2_pred):
             "prix":  f"{r['prix_eur_mwh']:.1f}",
             "co2":   f"{r['taux_co2']:.0f}",
         }
- 
+
     def format_zero():
         return {"month":"----","day":"00","year":"0000",
                 "hour":"00","min":"00","prix":"00.0","co2":"000"}
- 
+
     tranches_config = [
         ("À éviter",     "#ff2b2b"),
         ("Moment idéal", "#2bff5e"),
         ("Acceptable",   "#ffb02b"),
     ]
- 
+
     def row_html(data, color, active):
         opacity = "1" if active else "0.2"
         label  = "color:#ffffff; font-family:'Courier New',monospace; font-size:18px; letter-spacing:4px; margin-bottom:8px; font-weight:bold;"
@@ -208,12 +234,12 @@ def render_time_circuits(df_source, present_dt, prix_pred, co2_pred):
           <div style="text-align:center;"><div style="{label}">€ / MWh</div><div style="{number}">{data['prix']}</div></div>
           <div style="text-align:center;"><div style="{label}">g CO2</div><div style="{number}">{data['co2']}</div></div>
         </div>"""
- 
+
     color_ia  = "#00ffff"
     dt_sel    = present_dt
     label_ia  = "color:#ffffff; font-family:'Courier New',monospace; font-size:18px; letter-spacing:4px; margin-bottom:8px; font-weight:bold;"
     number_ia = f"font-family:'Digital-7 Mono','DSEG7 Classic','Courier New',monospace; font-size:62px; font-weight:bold; color:{color_ia}; text-shadow:0 0 14px {color_ia};"
- 
+
     ia_row = f"""
     <div style="display:flex;align-items:center;justify-content:space-around;width:100%;padding:10px 0;">
       <div style="text-align:center;"><div style="{label_ia}">MOIS</div><div style="{number_ia}">{mois_fr[dt_sel.strftime('%b')]}</div></div>
@@ -226,7 +252,7 @@ def render_time_circuits(df_source, present_dt, prix_pred, co2_pred):
       <div style="text-align:center;"><div style="{label_ia}">€ / MWh</div><div style="{number_ia}">{prix_pred}</div></div>
       <div style="text-align:center;"><div style="{label_ia}">g CO2</div><div style="{number_ia}">{int(co2_pred)}</div></div>
     </div>"""
- 
+
     rows_html = ""
     for tranche_name, color in tranches_config:
         is_active = (tranche_name == tranche_display_activa)
@@ -239,7 +265,7 @@ def render_time_circuits(df_source, present_dt, prix_pred, co2_pred):
           {tranche_name.upper()}
         </div>
         <hr style="border:none;border-top:1px solid #222;margin:0 0 16px 0;">"""
- 
+
     rows_html += ia_row
     rows_html += f"""
     <div style="text-align:center;font-family:'Courier New',monospace;font-size:18px;
@@ -247,7 +273,7 @@ def render_time_circuits(df_source, present_dt, prix_pred, co2_pred):
                 margin:4px 0 8px 0;">
        PRÉDICTION IA
     </div>"""
- 
+
     html = f"""
     <style>@import url('https://fonts.cdnfonts.com/css/digital-7-mono');</style>
     <div style="background:#000000;border:3px solid #444;border-radius:10px;
@@ -255,7 +281,7 @@ def render_time_circuits(df_source, present_dt, prix_pred, co2_pred):
       {rows_html}
     </div>"""
     components.html(html, height=820, scrolling=False)
- 
+
 # ─────────────────────────────────────────────
 # HEADER
 # ─────────────────────────────────────────────
@@ -303,9 +329,9 @@ st.markdown("""
 <p class="header-sub">&gt; QUAND ET OÙ CONSOMMER EN FRANCE_</p>
 <hr class="header-divider">
 """, unsafe_allow_html=True)
- 
+
 st.markdown('<p class="section-title">🛠 PANNEAU DE CONTRÔLE TEMPOREL</p>', unsafe_allow_html=True)
- 
+
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
@@ -339,7 +365,7 @@ div[data-testid="stButton"] > button:focus {
 }
 </style>
 """, unsafe_allow_html=True)
- 
+
 def flip_card(value, label, font_size="56px"):
     return f"""
     <div style="display:flex;flex-direction:column;align-items:center;">
@@ -358,40 +384,40 @@ def flip_card(value, label, font_size="56px"):
         <span style="position:relative;z-index:1;">{value}</span>
       </div>
     </div>"""
- 
+
 c1, c2, c3, c4, c5, c6, cbtn = st.columns([1, 1, 0.1, 1, 0.2, 1, 1.2])
- 
+
 with c1:
     st.button("▲", key="up_day", on_click=change, args=("fd",  1))
     st.markdown(flip_card(f"{st.session_state.fd:02d}", "JOUR"), unsafe_allow_html=True)
     st.button("▼", key="dn_day", on_click=change, args=("fd", -1))
- 
+
 with c2:
     st.button("▲", key="up_mon", on_click=change, args=("fm",  1))
     st.markdown(flip_card(MOIS_LABELS[st.session_state.fm-1], "MOIS", font_size="34px"), unsafe_allow_html=True)
     st.button("▼", key="dn_mon", on_click=change, args=("fm", -1))
- 
+
 with c3:
     st.markdown("""<div style="height:150px;display:flex;align-items:center;justify-content:center;">
       <div style="width:1px;height:80px;background:linear-gradient(to bottom,transparent,#333,transparent);"></div>
     </div>""", unsafe_allow_html=True)
- 
+
 with c4:
     st.button("▲", key="up_h",  on_click=change, args=("fh",   1))
     st.markdown(flip_card(f"{st.session_state.fh:02d}", "HEURE"), unsafe_allow_html=True)
     st.button("▼", key="dn_h",  on_click=change, args=("fh",  -1))
- 
+
 with c5:
     st.markdown("""<div style="height:150px;display:flex;align-items:center;justify-content:center;">
       <span style="font-size:44px;color:#555;font-family:'Share Tech Mono',monospace;
                    padding-top:20px;line-height:1;">:</span>
     </div>""", unsafe_allow_html=True)
- 
+
 with c6:
     st.button("▲", key="up_min", on_click=change, args=("fmin",  1))
     st.markdown(flip_card(f"{st.session_state.fmin:02d}", "MIN"), unsafe_allow_html=True)
     st.button("▼", key="dn_min", on_click=change, args=("fmin", -1))
- 
+
 with cbtn:
     if st.button("À ÉVITER",     key="btn_eviter"):
         jump_to_tranche("Cher")
@@ -402,7 +428,7 @@ with cbtn:
     if st.button("ACCEPTABLE",   key="btn_accept"):
         jump_to_tranche("Bon marché")
         st.rerun()
- 
+
     components.html("""
     <script>
     (function() {
@@ -464,7 +490,7 @@ with cbtn:
     })();
     </script>
     """, height=0, scrolling=False)
- 
+
 # ─────────────────────────────────────────────
 # RENDER PANEL
 # ─────────────────────────────────────────────
@@ -473,7 +499,6 @@ date_voyage = datetime.date(2025, st.session_state.fm, safe_day)
 present_dt_selected = datetime.datetime.combine(
     date_voyage, datetime.time(hour=st.session_state.fh, minute=st.session_state.fmin)
 )
- 
+
 prix_pred, co2_pred = predict_for_datetime(present_dt_selected, df)
 render_time_circuits(df, present_dt_selected, prix_pred, co2_pred)
- 
