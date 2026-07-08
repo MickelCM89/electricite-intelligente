@@ -31,7 +31,6 @@ def load_data():
     csv_path = Path(__file__).parent / "fact_energie_extended.csv"
     df = pd.read_csv(csv_path)
     df["date_heure"] = pd.to_datetime(df["date_heure"], utc=True)
-    # Recalcular tranche_prix propre en cas de NaN ou valeurs incorrectes
     df["tranche_prix"] = pd.cut(
         df["prix_eur_mwh"],
         bins=[-float("inf"), 10, 30, 60, float("inf")],
@@ -153,15 +152,7 @@ def jump_to_tranche(tranche_db):
     df_day = df[df["date_heure"].dt.date == date_sel]
     df_t = df_day[df_day["tranche_prix"] == tranche_db]
 
-    # Si no hay esa tranche en esa fecha → usar precio mínimo del día
-    if df_t.empty and not df_day.empty:
-        best = df_day.loc[df_day["prix_eur_mwh"].idxmin()]
-        dt = best["date_heure"].to_pydatetime()
-        st.session_state.fh = dt.hour
-        st.session_state.fmin = 0 if dt.minute < 15 else 30
-        return
-
-    # Si no hay datos para esa fecha → buscar en el mismo mes
+    # Si no hay esa tranche en esa fecha → buscar en todo el mes
     if df_t.empty:
         df_mes = df[df["date_heure"].dt.month == st.session_state.fm]
         df_t = df_mes[df_mes["tranche_prix"] == tranche_db]
@@ -175,7 +166,11 @@ def jump_to_tranche(tranche_db):
 
     best = df_t.loc[df_t["prix_eur_mwh"].idxmin()]
     dt = best["date_heure"].to_pydatetime()
-    st.session_state.fh = dt.hour
+
+    # Actualizar DÍA, MES, HORA y MINUTO
+    st.session_state.fd   = dt.day
+    st.session_state.fm   = dt.month
+    st.session_state.fh   = dt.hour
     st.session_state.fmin = 0 if dt.minute < 15 else 30
 
 # ─────────────────────────────────────────────
