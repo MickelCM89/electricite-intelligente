@@ -148,18 +148,14 @@ def jump_to_tranche(tranche_db):
     safe_day = min(st.session_state.fd, DAYS_IN_MONTH[st.session_state.fm - 1])
     date_sel = datetime.date(2025, st.session_state.fm, safe_day)
 
-    # Buscar en la fecha seleccionada
     df_day = df[df["date_heure"].dt.date == date_sel]
+
+    # Buscar la tranche pedida en ese día
     df_t = df_day[df_day["tranche_prix"] == tranche_db]
 
-    # Si no hay esa tranche en esa fecha → buscar en todo el mes
-    if df_t.empty:
-        df_mes = df[df["date_heure"].dt.month == st.session_state.fm]
-        df_t = df_mes[df_mes["tranche_prix"] == tranche_db]
-
-    # Último fallback → todo el dataset
-    if df_t.empty:
-        df_t = df[df["tranche_prix"] == tranche_db]
+    # Si no existe esa tranche ese día → usar el precio mínimo del día
+    if df_t.empty and not df_day.empty:
+        df_t = df_day.nsmallest(1, "prix_eur_mwh")
 
     if df_t.empty:
         return
@@ -167,9 +163,7 @@ def jump_to_tranche(tranche_db):
     best = df_t.loc[df_t["prix_eur_mwh"].idxmin()]
     dt = best["date_heure"].to_pydatetime()
 
-    # Actualizar DÍA, MES, HORA y MINUTO
-    st.session_state.fd   = dt.day
-    st.session_state.fm   = dt.month
+    # Solo actualizar HORA y MINUTO — no cambiar el día ni el mes
     st.session_state.fh   = dt.hour
     st.session_state.fmin = 0 if dt.minute < 15 else 30
 
