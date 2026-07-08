@@ -501,4 +501,4 @@ present_dt_selected = datetime.datetime.combine(
 )
 
 prix_pred, co2_pred = predict_for_datetime(present_dt_selected, df)
-render_time_circuits(df, present_dt_selected, prix_pred, co2_pred)
+render_time_circuits(df, present_dt_selected, prix_pred, co2_pred)loi
