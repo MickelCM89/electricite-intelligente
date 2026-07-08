@@ -126,7 +126,7 @@ DAYS_IN_MONTH = [31,28,31,30,31,30,31,31,30,31,30,31]
 # ─────────────────────────────────────────────
 # SESSION STATE
 # ─────────────────────────────────────────────
-for k, v in [("fd",15),("fm",6),("fh",12),("fmin",0)]:
+for k, v in [("fd",15),("fm",6),("fh",12),("fmin",0),("tranche_activa",None)]:
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -143,6 +143,8 @@ def change(field, delta):
         st.session_state.fh  = (st.session_state.fh + delta) % 24
     elif field == "fmin":
         st.session_state.fmin = 30 if st.session_state.fmin == 0 else 0
+    # Al cambiar manualmente la fecha/hora, resetear tranche_activa
+    st.session_state.tranche_activa = None
 
 def jump_to_tranche(tranche_db):
     safe_day = min(st.session_state.fd, DAYS_IN_MONTH[st.session_state.fm - 1])
@@ -163,9 +165,11 @@ def jump_to_tranche(tranche_db):
     best = df_t.loc[df_t["prix_eur_mwh"].idxmin()]
     dt = best["date_heure"].to_pydatetime()
 
-    # Solo actualizar HORA y MINUTO — no cambiar el día ni el mes
+    # Actualizar hora y minuto
     st.session_state.fh   = dt.hour
     st.session_state.fmin = 0 if dt.minute < 15 else 30
+    # Guardar qué tranche mostrar en el panel
+    st.session_state.tranche_activa = tranche_db
 
 # ─────────────────────────────────────────────
 # TIME CIRCUITS PANEL
@@ -182,7 +186,9 @@ def render_time_circuits(df_source, present_dt, prix_pred, co2_pred):
         df_day = df_source
     idx       = (df_day["date_heure"] - target).abs().idxmin()
     row_found = df_day.loc[idx]
-    tranche_db_activa         = row_found["tranche_prix"]
+
+    # Usar tranche_activa del session_state si existe, si no usar la real del registro
+    tranche_db_activa = st.session_state.get("tranche_activa") or row_found["tranche_prix"]
     tranche_display_activa, _ = TRANCHE_DISPLAY.get(tranche_db_activa, ("Acceptable","#ffb02b"))
 
     def format_active(r):
